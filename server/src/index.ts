@@ -1,0 +1,17 @@
+import "dotenv/config";import express from"express";import cors from"cors";import http from"http";import bcrypt from"bcryptjs";import jwt from"jsonwebtoken";import fs from"fs";import path from"path";import {Server}from"socket.io";
+const file=path.resolve(process.cwd(),process.env.DATABASE_URL||"./server/data/orbit.json");fs.mkdirSync(path.dirname(file),{recursive:true});
+let db:any=fs.existsSync(file)?JSON.parse(fs.readFileSync(file,"utf8")):{users:[],communities:[],messages:[]};
+const secret=process.env.JWT_SECRET||"dev-secret";const app=express();const server=http.createServer(app);const io=new Server(server,{cors:{origin:process.env.CLIENT_ORIGIN||"http://localhost:5173"}});
+app.use(cors({origin:process.env.CLIENT_ORIGIN||"http://localhost:5173"}));app.use(express.json());
+const save=()=>fs.writeFileSync(file,JSON.stringify(db,null,2));
+const auth=(req:any,res:any,next:any)=>{try{req.user=jwt.verify((req.headers.authorization||"").replace("Bearer ",""),secret);next()}catch{res.status(401).json({error:"Unauthorized"})}};
+app.get("/api/health",(_,r)=>r.json({ok:true}));
+app.post("/api/auth/signup",async(req,res)=>{const{name,email,password}=req.body;if(!name||!email||!password)return res.status(400).json({error:"Missing fields"});if(db.users.some((u:any)=>u.email===email.toLowerCase()))return res.status(409).json({error:"Email already registered"});const u={id:"u_"+Date.now(),name,email:email.toLowerCase(),password:await bcrypt.hash(password,10)};db.users.push(u);if(!db.communities.length)db.communities=[{id:"orbit",name:"Orbit Community",icon:"O",channels:[{id:"general",name:"general",type:"text"},{id:"development",name:"development",type:"text"},{id:"gaming",name:"gaming",type:"text"},{id:"lounge",name:"Lounge",type:"voice"}]}];save();res.json({token:jwt.sign({id:u.id},secret,{expiresIn:"7d"}),user:{id:u.id,name:u.name,email:u.email}})});
+app.post("/api/auth/login",async(req,res)=>{const{email,password}=req.body,u=db.users.find((x:any)=>x.email===email?.toLowerCase());if(!u||!(await bcrypt.compare(password,u.password)))return res.status(401).json({error:"Invalid credentials"});res.json({token:jwt.sign({id:u.id},secret,{expiresIn:"7d"}),user:{id:u.id,name:u.name,email:u.email}})});
+app.get("/api/me",auth,(req:any,res)=>{const u=db.users.find((x:any)=>x.id===req.user.id);res.json({user:{id:u.id,name:u.name,email:u.email}})});
+app.get("/api/communities",auth,(_,res)=>res.json({communities:db.communities,friends:db.users.slice(0,20).map((u:any)=>({id:u.id,name:u.name,status:"Online"}))}));
+app.get("/api/channels/:id/messages",auth,(req,res)=>res.json({messages:db.messages.filter((m:any)=>m.channelId===req.params.id).map((m:any)=>({...m,user:db.users.find((u:any)=>u.id===m.userId)}))}));
+app.post("/api/messages",auth,(req:any,res)=>{const{channelId,content}=req.body;if(!channelId||!content?.trim())return res.status(400).json({error:"Invalid message"});const m={id:"m_"+Date.now(),channelId,userId:req.user.id,content:content.trim().slice(0,4000),createdAt:new Date().toISOString()};db.messages.push(m);save();const out={...m,user:db.users.find((u:any)=>u.id===m.userId)};io.to("channel:"+channelId).emit("message",out);res.status(201).json({message:out})});
+io.use((s:any,n)=>{try{s.data.user=jwt.verify(s.handshake.auth.token,secret);n()}catch{n(new Error("Unauthorized"))}});
+io.on("connection",s=>s.on("join_channel",(id:string)=>s.join("channel:"+id)));
+server.listen(Number(process.env.PORT||3001),()=>console.log("Orbit API: http://localhost:3001"));
