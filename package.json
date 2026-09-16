@@ -1,0 +1,1 @@
+{"name":"orbit","private":true,"workspaces":["client","server"],"scripts":{"dev":"concurrently \"npm run dev -w client\" \"npm run dev -w server\"","build":"npm run build -w client"},"devDependencies":{"concurrently":"^9.1.0"}}
